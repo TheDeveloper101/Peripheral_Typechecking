@@ -6,7 +6,7 @@ use syn::spanned::Spanned;
 use syn::visit_mut::{visit_expr_method_call_mut, VisitMut};
 use syn::{parse_macro_input, ExprMethodCall, Ident};
 
-#[derive(PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Clone)]
 enum USBType {
     Uninit(EndpointType),
     Idle(EndpointType),
@@ -15,15 +15,15 @@ enum USBType {
     Unused(EndpointType)
 }
 
-#[derive(PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Clone)]
 enum EndpointType {
     Blah
 }
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Hash)]
 enum Entry {
-    Variable(syn::Ident),
-    Function(syn::Ident)
+    Variable(Ident),
+    Function(Ident)
 }
 struct Context {
     gamma: HashMap<Entry, (USBType, USBType)>,
@@ -60,10 +60,12 @@ impl VisitMut for Context {
         let method_type = self.gamma.get(&Entry::Function(i.method.clone())).unwrap();
         if let syn::Expr::Path(ref path) = *i.receiver {
             if let Some(ident) = path.path.get_ident() {
-                if method_type.0 == self.gamma.get(&Entry::Variable(ident.clone())).unwrap().0 {
+                let mut peripheral = &self.gamma.get(&Entry::Variable(ident.clone())).unwrap().0;
+                if method_type.0 == *peripheral {
                     let end = self.gamma.get(&Entry::Function(i.method.clone()));
                     match end {
                         Some(t) => {
+                            *& mut peripheral = & mut USBType::join(peripheral.clone(), t.1.clone());
                             visit_expr_method_call_mut(self, i)
                         }
                         None => {
