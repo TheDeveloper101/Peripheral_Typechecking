@@ -50,8 +50,8 @@ pub fn get_types_methods(args: TokenStream, input: TokenStream) -> TokenStream {
                 if let Some((func_name, types)) = extract_method_types(attr) {
                     if *name == func_name {
                         let (type1_str, type2_str) = parse_types(&types);
-                        let type1 = str_to_enum(&type1_str);
-                        let type2 = str_to_enum(&type2_str);
+                        let type1 = str_to_type(&type1_str);
+                        let type2 = str_to_type(&type2_str);
                         c.gamma.insert(Entry::Function(name.clone()), (type1, type2));
                     }
                 }
@@ -142,7 +142,7 @@ fn parse_types(types_str: &str) -> (String, String) {
     }
 }
 
-fn str_to_enum(type_str: &str) -> USBType {
+fn str_to_type(type_str: &str) -> USBType {
     match type_str {
         "uninit" => USBType::Uninit(EndpointType::Disabled),
         "idle" => USBType::Idle(EndpointType::Disabled),
