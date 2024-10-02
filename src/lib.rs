@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::spanned::Spanned;
-use syn::visit_mut::{visit_expr_method_call_mut, VisitMut};
-use syn::{parse_macro_input, Attribute, Expr, ExprMethodCall, Ident, ImplItem, ItemImpl, Lit, Meta};
+use syn::visit_mut::{visit_item_impl_mut, VisitMut};
+use syn::{parse_macro_input, Attribute, Expr, ExprCall, ExprMethodCall, Ident, ImplItem, ItemImpl, LocalInit, Meta, Pat, PatPath, Type};
 
 #[derive(PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Clone)]
 enum USBType {
@@ -30,35 +30,8 @@ enum Entry {
 }
 struct Context {
     gamma: HashMap<Entry, (USBType, USBType)>,
-    error: Option<String>
-}
-
-
-#[proc_macro_attribute]
-pub fn get_types_methods(args: TokenStream, input: TokenStream) -> TokenStream {
-    let _ = args;
-    let input2 = input.clone();
-    let ast = parse_macro_input!(input as ItemImpl);
-    let mut c = Context {
-        gamma: HashMap::new(),
-        error: None
-    };
-    for item in ast.items.iter() {
-        if let ImplItem::Fn(func) = item {
-            let name = &func.sig.ident;
-            for attr in &func.attrs {
-                if let Some((func_name, types)) = extract_method_types(attr) {
-                    if *name == func_name {
-                        let (type1_str, type2_str) = parse_types(&types);
-                        let type1 = str_to_type(&type1_str);
-                        let type2 = str_to_type(&type2_str);
-                        c.gamma.insert(Entry::Function(name.clone()), (type1, type2));
-                    }
-                }
-            }
-        } 
-    }
-    input2.into()
+    error: Option<String>,
+    var_types: Vec<Ident>
 }
 
 #[proc_macro_attribute]
@@ -66,11 +39,12 @@ pub fn typecheck(args: TokenStream, input: TokenStream) -> TokenStream {
     let _ = args;
     let mut c: Context = Context {
                     gamma: HashMap::new(),
-                    error: None
+                    error: None,
+                    var_types: Vec::new()
                 };
-    let mut ast = parse_macro_input!(input as syn::ExprMethodCall);
+    let mut ast = parse_macro_input!(input as syn::File);
     let mut ret: proc_macro2::TokenStream = quote! {#ast};
-    c.visit_expr_method_call_mut(&mut ast);
+    c.visit_file_mut(&mut ast);
     match c.error {
         None => {}
         Some(message) => {
@@ -97,11 +71,62 @@ impl VisitMut for Context {
                     match end {
                         Some(t) => {
                             *& mut peripheral = & mut USBType::join(peripheral.clone(), t.1.clone());
-                            visit_expr_method_call_mut(self, i)
+                            self.visit_expr_method_call_mut(i)
                         }
                         None => {
                             self.error = Some("Improper API Usage!".to_string());
                             return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_item_impl_mut(&mut self, i: &mut syn::ItemImpl) {
+
+        //get type name of struct so that we can find the variable later
+        if let Type::Path(syn::TypePath { path, .. }) = &*i.self_ty {
+            if let Some(ident) = path.get_ident() {
+                self.var_types.push(ident.clone());
+            }
+        }
+
+        for item in &i.items {
+            if let ImplItem::Fn(func) = item {
+                let name = &func.sig.ident;
+                for attr in &func.attrs {
+                    if let Some((func_name, types)) = extract_method_types(attr) {
+                        if *name == func_name {
+                            let (type1_str, type2_str) = parse_types(&types);
+                            let type1 = str_to_type(&type1_str);
+                            let type2 = str_to_type(&type2_str);
+                            self.gamma.insert(Entry::Function(name.clone()), (type1, type2));
+                        }
+                    }
+                }
+            } 
+        }
+        self.visit_item_impl_mut(i);
+    }
+
+    fn visit_local_mut(&mut self, i: &mut syn::Local) {
+        let pat = &i.pat;
+        if let Pat::Ident(name) = pat {
+            let var_name = &name.ident;
+            let li = &i.init.clone();
+            if let Expr::Call(call) = *li.clone().unwrap().expr {
+                if let Expr::Path(path) = *call.func {
+                    let segments: Vec<_> = path.path.segments.iter().collect();
+                    if segments.len() == 2 {
+                        let struct_name = &segments[0].ident;
+                        let method_name = &segments[1].ident;
+                        if method_name == "new" && self.var_types.contains(struct_name) {
+                            // struct::new(), and struct is in our list
+                            self.gamma.insert(
+                                Entry::Variable(var_name.clone()),
+                                (USBType::Uninit(EndpointType::Disabled), USBType::Unused(EndpointType::Disabled)),
+                            );
                         }
                     }
                 }
